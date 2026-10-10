@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>MagicFiles · Google Drive</title>
+  <!--
+    MagicFiles' Google Drive picker.
+
+    The app opens this page in the system's web sign-in window and passes
+    everything in the URL fragment (#token=…&key=…&appId=…&scheme=…), which a
+    browser never sends to any server. The page shows Google's picker,
+    starting in "My Drive", and hands the chosen file IDs back to the app
+    through its own redirect scheme. It stores nothing and loads nothing but
+    Google's picker library.
+  -->
+  <style>
+    :root {
+      color-scheme: light dark;
+      --background: #f5f6fa;
+      --text: #1c1c1e;
+      --muted: #6e6e73;
+      --accent: #6b5cff;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --background: #111216;
+        --text: #f2f2f7;
+        --muted: #a1a1a6;
+        --accent: #8a7dff;
+      }
+    }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: var(--background);
+      color: var(--text);
+      font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    }
+    main {
+      box-sizing: border-box;
+      min-height: 100%;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      text-align: center;
+    }
+    .brand {
+      font-size: 24px;
+      font-weight: 700;
+      background: linear-gradient(90deg, #ffb340, #ff4fd8, #5c7cff);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+    #status {
+      max-width: 32em;
+      color: var(--muted);
+    }
+    button {
+      appearance: none;
+      border: 0;
+      border-radius: 999px;
+      padding: 10px 18px;
+      font: inherit;
+      font-weight: 600;
+      color: #fff;
+      background: var(--accent);
+      cursor: pointer;
+    }
+    button.secondary {
+      background: transparent;
+      color: var(--accent);
+    }
+    [hidden] {
+      display: none !important;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand">MagicFiles</div>
+    <div id="status"></div>
+    <button id="reopen" hidden></button>
+    <button id="back" class="secondary"></button>
+  </main>
+
+  <script>
+    (function () {
+      'use strict';
+
+      var params = new URLSearchParams(location.hash.slice(1));
+      // The access token must not linger in the address bar or the history.
+      history.replaceState(null, '', location.pathname + location.search);
+
+      var token = params.get('token') || '';
+      var key = params.get('key') || '';
+      var appId = params.get('appId') || '';
+      var scheme = params.get('scheme') || '';
+      var mimes = params.get('mimes') || '';
+      var lang = (params.get('lang') || navigator.language || 'en').slice(0, 2).toLowerCase();
+
+      var texts = {
+        de: {
+          loading: 'Google Drive wird geladen …',
+          choose: 'Wähle die Dateien aus, die du zu MagicFiles hinzufügen möchtest.',
+          returning: 'Zurück zu MagicFiles …',
+          reopen: 'Dateiauswahl öffnen',
+          back: 'Zurück zu MagicFiles',
+          missing: 'Diese Seite wird von der App MagicFiles geöffnet.',
+          failed: 'Google Drive konnte nicht geladen werden. Prüfe die Internetverbindung und versuche es erneut.'
+        },
+        en: {
+          loading: 'Loading Google Drive …',
+          choose: 'Choose the files you want to add to MagicFiles.',
+          returning: 'Returning to MagicFiles …',
+          reopen: 'Open File Picker',
+          back: 'Back to MagicFiles',
+          missing: 'This page is opened by the MagicFiles app.',
+          failed: 'Google Drive could not be loaded. Check the internet connection and try again.'
+        },
+        es: {
+          loading: 'Cargando Google Drive…',
+          choose: 'Elige los archivos que quieres añadir a MagicFiles.',
+          returning: 'Volviendo a MagicFiles…',
+          reopen: 'Abrir selector de archivos',
+          back: 'Volver a MagicFiles',
+          missing: 'Esta página la abre la app MagicFiles.',
+          failed: 'No se pudo cargar Google Drive. Comprueba la conexión a Internet e inténtalo de nuevo.'
+        },
+        fr: {
+          loading: 'Chargement de Google Drive…',
+          choose: 'Choisissez les fichiers à ajouter à MagicFiles.',
+          returning: 'Retour à MagicFiles…',
+          reopen: 'Ouvrir le sélecteur de fichiers',
+          back: 'Retour à MagicFiles',
+          missing: 'Cette page est ouverte par l’app MagicFiles.',
+          failed: 'Google Drive n’a pas pu être chargé. Vérifiez la connexion Internet et réessayez.'
+        }
+      };
+      var t = texts[lang] || texts.en;
+      document.documentElement.lang = texts[lang] ? lang : 'en';
+
+      var statusElement = document.getElementById('status');
+      var reopenButton = document.getElementById('reopen');
+      var backButton = document.getElementById('back');
+      reopenButton.textContent = t.reopen;
+      backButton.textContent = t.back;
+
+      // Results only ever go back to the app's own redirect scheme.
+      var hasValidScheme = /^com\.googleusercontent\.apps\.[0-9A-Za-z-]+$/.test(scheme);
+      var isConfigured = Boolean(token && key && /^[0-9]+$/.test(appId) && hasValidScheme);
+      var isReady = false;
+
+      function finish(query) {
+        if (hasValidScheme) {
+          location.href = scheme + ':/picked?' + query;
+        }
+      }
+
+      function fail() {
+        statusElement.textContent = t.failed;
+        reopenButton.hidden = true;
+      }
+
+      backButton.addEventListener('click', function () {
+        finish('cancelled=1');
+      });
+      reopenButton.addEventListener('click', function () {
+        showPicker();
+      });
+
+      statusElement.textContent = isConfigured ? t.loading : t.missing;
+      backButton.hidden = !hasValidScheme;
+
+      window.magicFilesPickerLibraryLoaded = function () {
+        if (!isConfigured) {
+          return;
+        }
+        gapi.load('picker', {
+          callback: function () {
+            isReady = true;
+            showPicker();
+          },
+          onerror: fail,
+          timeout: 15000,
+          ontimeout: fail
+        });
+      };
+      window.magicFilesPickerLibraryFailed = fail;
+
+      function listView() {
+        var picker = google.picker;
+        var view = new picker.DocsView(picker.ViewId.DOCS)
+          .setMode(picker.DocsViewMode.LIST)
+          .setIncludeFolders(true);
+        if (mimes) {
+          // Folders stay visible to open them; they cannot be chosen.
+          view.setMimeTypes(mimes + ',application/vnd.google-apps.folder');
+        }
+        return view;
+      }
+
+      function showPicker() {
+        if (!isReady) {
+          return;
+        }
+        var picker = google.picker;
+        var myDrive = listView().setParent('root');
+        var sharedWithMe = listView().setOwnedByMe(false);
+        var starred = listView().setStarred(true);
+        var upload = new picker.DocsUploadView().setParent('root');
+
+        new picker.PickerBuilder()
+          .setAppId(appId)
+          .setOAuthToken(token)
+          .setDeveloperKey(key)
+          .setLocale(lang)
+          .setOrigin(location.protocol + '//' + location.host)
+          .enableFeature(picker.Feature.MULTISELECT_ENABLED)
+          .enableFeature(picker.Feature.SUPPORT_DRIVES)
+          .addView(myDrive)
+          .addView(sharedWithMe)
+          .addView(starred)
+          .addView(upload)
+          .setSize(window.innerWidth, window.innerHeight)
+          .setCallback(handlePickerResult)
+          .build()
+          .setVisible(true);
+
+        statusElement.textContent = t.choose;
+        reopenButton.hidden = true;
+      }
+
+      function handlePickerResult(data) {
+        var picker = google.picker;
+        var action = data[picker.Response.ACTION];
+        if (action === picker.Action.PICKED) {
+          var ids = (data[picker.Response.DOCUMENTS] || [])
+            .map(function (document) { return document[picker.Document.ID]; })
+            .filter(Boolean);
+          statusElement.textContent = t.returning;
+          finish('picked_file_ids=' + encodeURIComponent(ids.join(',')));
+        } else if (action === picker.Action.CANCEL) {
+          statusElement.textContent = t.returning;
+          // Shown should the app not take over, e.g. outside MagicFiles.
+          reopenButton.hidden = false;
+          finish('cancelled=1');
+        }
+      }
+    })();
+  </script>
+  <script async defer src="https://apis.google.com/js/api.js"
+          onload="magicFilesPickerLibraryLoaded()"
+          onerror="magicFilesPickerLibraryFailed()"></script>
+</body>
+</html>
